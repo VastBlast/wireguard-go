@@ -52,15 +52,35 @@ type netTun struct {
 
 type Net netTun
 
+type Options struct {
+	// TCPTimeWaitTimeout overrides the TCP TIME_WAIT duration. If zero or
+	// negative, the default stack value is preserved.
+	TCPTimeWaitTimeout time.Duration
+	// TCPTimeWaitReuse sets how TIME_WAIT sockets may be reused. Nil leaves the
+	// stack default unchanged.
+	TCPTimeWaitReuse *tcpip.TCPTimeWaitReuseOption
+	// ChannelDepth sets the packet queue depth for the virtual NIC. If zero or
+	// negative, the default of 1024 is used.
+	ChannelDepth int
+}
+
 func CreateNetTUN(localAddresses, dnsServers []netip.Addr, mtu int) (tun.Device, *Net, error) {
-	opts := stack.Options{
+	return CreateNetTUNWithOptions(localAddresses, dnsServers, mtu, nil)
+}
+
+func CreateNetTUNWithOptions(localAddresses, dnsServers []netip.Addr, mtu int, opts *Options) (tun.Device, *Net, error) {
+	stackOpts := stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol6, icmp.NewProtocol4},
 		HandleLocal:        true,
 	}
+	queueDepth := 1024
+	if opts != nil && opts.ChannelDepth > 0 {
+		queueDepth = opts.ChannelDepth
+	}
 	dev := &netTun{
-		ep:             channel.New(1024, uint32(mtu), ""),
-		stack:          stack.New(opts),
+		ep:             channel.New(queueDepth, uint32(mtu), ""),
+		stack:          stack.New(stackOpts),
 		events:         make(chan tun.Event, 10),
 		incomingPacket: make(chan *buffer.View),
 		dnsServers:     dnsServers,
@@ -70,6 +90,19 @@ func CreateNetTUN(localAddresses, dnsServers []netip.Addr, mtu int) (tun.Device,
 	tcpipErr := dev.stack.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
 	if tcpipErr != nil {
 		return nil, nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
+	}
+	if opts != nil && opts.TCPTimeWaitTimeout > 0 {
+		timeWaitOpt := tcpip.TCPTimeWaitTimeoutOption(opts.TCPTimeWaitTimeout)
+		tcpipErr = dev.stack.SetTransportProtocolOption(tcp.ProtocolNumber, &timeWaitOpt)
+		if tcpipErr != nil {
+			return nil, nil, fmt.Errorf("set TCP TIME-WAIT timeout: %v", tcpipErr)
+		}
+	}
+	if opts != nil && opts.TCPTimeWaitReuse != nil {
+		tcpipErr = dev.stack.SetTransportProtocolOption(tcp.ProtocolNumber, opts.TCPTimeWaitReuse)
+		if tcpipErr != nil {
+			return nil, nil, fmt.Errorf("set TCP TIME-WAIT reuse: %v", tcpipErr)
+		}
 	}
 	dev.notifyHandle = dev.ep.AddNotify(dev)
 	tcpipErr = dev.stack.CreateNIC(1, dev.ep)

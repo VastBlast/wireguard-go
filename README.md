@@ -1,5 +1,11 @@
 # Go Implementation of [WireGuard](https://www.wireguard.com/)
 
+## Fork Notes
+- Added `CreateNetTUNWithOptions` to build the netstack TUN with optional tuning:
+  - `Options.TCPTimeWaitTimeout`: override TCP TIME_WAIT duration (shorter frees memory/ports faster; longer keeps reuse safety).
+  - `Options.TCPTimeWaitReuse`: set TIME_WAIT port reuse scope (disable reuse vs. allow loopback/global reuse to cut ephemeral port pressure).
+  - `Options.ChannelDepth`: set NIC queue length (higher swallows packet bursts; lower reduces per-instance memory and drops/backpressures sooner).
+
 This is an implementation of WireGuard in Go.
 
 ## Usage
